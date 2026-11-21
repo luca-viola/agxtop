@@ -7,7 +7,8 @@ top     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 # Copr's checkout is owned by another user; allow it for this call only
 git     := git -c safe.directory=$(top) -C $(top)
 outdir  ?= $(top)/rpmbuild
-spec    ?= $(top)/agxtop.spec
+# Copr passes spec=<checkout dir>, so don't take it from the command line
+override spec := $(top)/agxtop.spec
 version := $(shell sed -n 's/^version = "\(.*\)"/\1/p' $(top)/Cargo.toml | head -1)
 specver := $(shell sed -n 's/^Version: *//p' $(spec))
 
