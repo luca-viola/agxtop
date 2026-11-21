@@ -32,6 +32,39 @@ fn hmax(h: &VecDeque<f64>) -> f64 {
     h.iter().copied().fold(0.0, f64::max)
 }
 
+fn joined_len(items: &[(String, Style)], sep: &str) -> usize {
+    let n: usize = items.iter().map(|i| i.0.chars().count()).sum();
+    n + sep.chars().count() * items.len().saturating_sub(1)
+}
+
+/// Split items into rows no wider than `width`, keeping each item whole.
+fn pack(items: &[(String, Style)], sep: &str, width: usize) -> Vec<Vec<(String, Style)>> {
+    let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
+    let mut cur: Vec<(String, Style)> = Vec::new();
+    for it in items {
+        cur.push(it.clone());
+        if cur.len() > 1 && joined_len(&cur, sep) > width {
+            let last = cur.pop().unwrap();
+            rows.push(std::mem::replace(&mut cur, vec![last]));
+        }
+    }
+    if !cur.is_empty() {
+        rows.push(cur);
+    }
+    rows
+}
+
+fn put_row(p: &mut Painter, y: i32, mut x: i32, items: &[(String, Style)], sep: &str) {
+    for (i, (t, st)) in items.iter().enumerate() {
+        if i > 0 {
+            p.put(y, x, sep, Style::default());
+            x += sep.chars().count() as i32;
+        }
+        p.put(y, x, t, *st);
+        x += t.chars().count() as i32;
+    }
+}
+
 fn rnd(v: f64) -> i64 {
     v.round() as i64
 }
@@ -394,32 +427,37 @@ impl Ui {
         } else {
             parts.join(" · ")
         };
-        let short_head = {
-            let sp: Vec<String> =
-                [self.soc.clone(), gi.cores.map(|c| format!("{c} cores"))].into_iter().flatten().collect();
-            if sp.is_empty() { head.clone() } else { sp.join(" · ") }
-        };
         let tot = gi.timeouts + self.kmsg.new;
         let now_s = if self.kmsg.new > 0 { format!(" (+{} now!)", self.kmsg.new) } else { String::new() };
-        let long_rest =
-            format!("jobs/s: {}   {}s   {}   ", thousands(self.jobs_s), fmt_g(self.interval), clock_hms());
-        let short_rest = format!("{} jobs/s  ", thousands(self.jobs_s));
-        let long_to = format!("GPU timeouts: {tot} this boot{now_s}");
-        let short_to = format!("timeouts: {tot}{now_s}");
-        // longest variant that fits the width
-        let fits = |h: &str, r: &str, t: &str| 15 + h.chars().count() + 4 + r.chars().count() + t.chars().count() <= w as usize;
-        let (head, rest, to) = [(&head, &long_rest, &long_to), (&head, &short_rest, &short_to)]
-            .into_iter()
-            .find(|(h, r, t)| fits(h, r, t))
-            .unwrap_or((&short_head, &short_rest, &short_to));
-        let mut x = 15;
-        p.put(y, x, &format!(" {head}"), bold);
-        x += head.chars().count() as i32 + 4;
-        p.put(y, x, rest, Style::default());
-        x += rest.chars().count() as i32;
         let tst = if self.kmsg.new > 0 { Painter::cpb(3) } else { Painter::cp(if tot > 0 { 2 } else { 1 }) };
-        p.put(y, x, to, tst);
-        y += 1;
+        let plain = Style::default();
+        let head_items: Vec<(String, Style)> =
+            if parts.is_empty() { vec![(head, bold)] } else { parts.into_iter().map(|s| (s, bold)).collect() };
+        let stat_items = vec![
+            (format!("jobs/s: {}", thousands(self.jobs_s)), plain),
+            (format!("{}s", fmt_g(self.interval)), plain),
+            (clock_hms(), plain),
+            (format!("GPU timeouts: {tot} this boot{now_s}"), tst),
+        ];
+        // one line when it fits, else chip info and stats on their own lines,
+        // both starting in the same column
+        let hx = 16;
+        let avail = (w - 1 - hx).max(1) as usize;
+        let hlen = joined_len(&head_items, " · ");
+        if hlen + 4 + joined_len(&stat_items, "   ") <= avail {
+            put_row(&mut p, y, hx, &head_items, " · ");
+            put_row(&mut p, y, hx + hlen as i32 + 4, &stat_items, "   ");
+            y += 1;
+        } else {
+            for row in pack(&head_items, " · ", avail) {
+                put_row(&mut p, y, hx, &row, " · ");
+                y += 1;
+            }
+            for row in pack(&stat_items, "   ", avail) {
+                put_row(&mut p, y, hx, &row, "   ");
+                y += 1;
+            }
+        }
 
         let half = (w - 3) / 2;
         p.put(y, 1, "GPU", Painter::cpb(4));
@@ -439,29 +477,53 @@ impl Ui {
         }
         p.stacked_bar(y, half + 6, w - half - 7, self.ram_total, &[(gpu, 6), (used - gpu, 7)], &mlab);
         y += 1;
-        let mut info_row = false;
+        let mut info_rows = 0;
         if self.mem_total_clients.is_none() {
             p.put(y, 1, "GPU memory: n/a (driver doesn't report)", Style::default());
-            info_row = true;
+            info_rows = 1;
         }
         if !self.sensors.is_empty() {
-            let sens = self
+            // grid right-aligned under MEM: labels left, values right
+            let cells: Vec<(&str, String)> = self
                 .sensors
                 .iter()
                 .map(|s| {
-                    if s.unit == "W" {
-                        format!("{} {:.1}{}", s.label, s.value, s.unit)
-                    } else {
-                        format!("{} {:.0}{}", s.label, s.value, s.unit)
-                    }
+                    let v = if s.unit == "W" { format!("{:.1}{}", s.value, s.unit) } else { format!("{:.0}{}", s.value, s.unit) };
+                    (s.label.as_str(), v)
                 })
-                .collect::<Vec<_>>()
-                .join("   ");
-            let sens: String = sens.chars().take((w - half - 3).max(0) as usize).collect();
-            p.put(y, half + 2, &sens, Painter::cp(2));
-            info_row = true;
+                .collect();
+            let lw = cells.iter().map(|c| c.0.chars().count()).max().unwrap_or(0);
+            let vw = cells.iter().map(|c| c.1.chars().count()).max().unwrap_or(0);
+            let cw = (lw + 1 + vw) as i32;
+            let gap = 4;
+            let n = cells.len() as i32;
+            // (rows, cols) for a grid starting at column `left`, balanced
+            let grid = |left: i32| {
+                let region = (w - 1 - left).max(1);
+                let max_cols = ((region + gap) / (cw + gap)).clamp(1, n);
+                let rows = (n + max_cols - 1) / max_cols;
+                (rows, (n + rows - 1) / rows)
+            };
+            // under MEM if it takes at most 2 rows there, else the full width
+            // (below the n/a note, if any)
+            let (mut left, mut sy) = (half + 2, y);
+            let (mut rows, mut cols) = grid(left);
+            if rows > 2 {
+                (left, sy) = (1, y + info_rows);
+                (rows, cols) = grid(left);
+            }
+            let bw = cols * cw + (cols - 1) * gap;
+            let x0 = (w - 1 - bw).max(left);
+            for (i, (l, v)) in cells.iter().enumerate() {
+                let (r, c) = (i as i32 / cols, i as i32 % cols);
+                let cell = format!("{l:<lw$} {v:>vw$}", lw = lw, vw = vw);
+                p.put(sy + r, x0 + c * (cw + gap), &cell, Painter::cp(2));
+            }
+            info_rows = info_rows.max(sy - y + rows);
         }
-        if info_row || h >= 30 {
+        if info_rows > 0 {
+            y += info_rows;
+        } else if h >= 30 {
             y += 1;
         }
         if h >= 30 {
