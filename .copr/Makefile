@@ -18,8 +18,9 @@ srpm:
 	command -v git >/dev/null || dnf -y install git
 	mkdir -p $(outdir)
 	$(git) archive --prefix=agxtop-$(version)/ -o $(outdir)/agxtop-$(version).tar.gz HEAD
-	cd $(top) && cargo vendor --locked --versioned-dirs $(outdir)/vendor >/dev/null
-	tar -C $(outdir) -czf $(outdir)/agxtop-$(version)-vendor.tar.gz vendor
+	# vendor outside outdir: Copr collects everything left in outdir
+	cd $(top) && cargo vendor --locked --versioned-dirs target/copr/vendor >/dev/null
+	tar -C $(top)/target/copr -czf $(outdir)/agxtop-$(version)-vendor.tar.gz vendor
 	sed "s/^Release: .*/Release:        $$($(git) rev-list --count HEAD)%{?dist}/" $(spec) > $(outdir)/agxtop.spec
 	rpmbuild -bs $(outdir)/agxtop.spec \
 	    --define "_sourcedir $(outdir)" --define "_srcrpmdir $(outdir)"
