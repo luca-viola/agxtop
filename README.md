@@ -63,3 +63,7 @@ reading tracefs directly when perf isn't available).
 
 `legacy/agxtop.py` is the original single-file Python/curses version (tracefs
 only, needs sudo). It is kept for reference.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
