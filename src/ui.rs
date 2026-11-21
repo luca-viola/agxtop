@@ -19,7 +19,7 @@ enum Sort {
     Cpu,
     Mem,
     Rss,
-    Virt,
+    Swap,
     Pid,
     Name,
 }
@@ -582,7 +582,7 @@ impl Ui {
             // estimated sizes are marked once here instead of on every row
             if self.mem_est { "~GPU MEM" } else { "GPU MEM" },
             "SYS MEM",
-            "VIRT MEM"
+            "SWAP"
         );
         p.put(y, 0, &format!("{hdr:<width$}", width = w as usize), Painter::cpb(5));
         y += 1;
@@ -596,7 +596,7 @@ impl Ui {
                 Sort::Cpu => a.cpu.unwrap_or(0.0).total_cmp(&b.cpu.unwrap_or(0.0)),
                 Sort::Mem => a.mem.unwrap_or(0.0).total_cmp(&b.mem.unwrap_or(0.0)),
                 Sort::Rss => a.rss.unwrap_or(0.0).total_cmp(&b.rss.unwrap_or(0.0)),
-                Sort::Virt => a.vsz.unwrap_or(0.0).total_cmp(&b.vsz.unwrap_or(0.0)),
+                Sort::Swap => a.swap.unwrap_or(0.0).total_cmp(&b.swap.unwrap_or(0.0)),
                 Sort::Pid => a.pid.cmp(&b.pid),
                 Sort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
             };
@@ -632,7 +632,7 @@ impl Ui {
                 pr.cpu.map_or("".into(), |c| format!("{c:.1}")),
                 whole(pr.mem),
                 whole(pr.rss),
-                whole(pr.vsz),
+                whole(pr.swap),
                 pr.cmd
             );
             if self.top + i == self.sel {
@@ -655,12 +655,12 @@ impl Ui {
             Sort::Cpu => "CPU%",
             Sort::Mem => "GPU mem",
             Sort::Rss => "sys mem",
-            Sort::Virt => "virt mem",
+            Sort::Swap => "swap",
             Sort::Pid => "PID",
             Sort::Name => "name",
         };
         let mut foot = format!(
-            " h help {} q quit  g/c/m/s/v/p/n sort ({sortname}{})  r reverse  z zoom mem  +/- interval ",
+            " h help {} q quit  g/c/m/s/w/p/n sort ({sortname}{})  r reverse  z zoom mem  +/- interval ",
             if w < 60 { " Tab graph " } else { "" },
             if self.reverse { " ↓" } else { " ↑" }
         );
@@ -682,8 +682,8 @@ impl Ui {
             ("  ↑ / ↓            select process", false),
             ("  PgUp / PgDn      scroll a page", false),
             ("  Home / End       first / last process", false),
-            ("  g c m s v p n    sort by GPU% / CPU% / GPU mem /", false),
-            ("                   sys mem / virt mem / PID / name", false),
+            ("  g c m s w p n    sort by GPU% / CPU% / GPU mem /", false),
+            ("                   sys mem / swap / PID / name", false),
             ("                   (press again to reverse)", false),
             ("  r                reverse sort order", false),
             ("  z                zoom memory graph to what's in use", false),
@@ -746,13 +746,13 @@ impl Ui {
             KeyCode::PageDown => self.move_sel(page),
             KeyCode::Home => self.move_sel(-1_000_000),
             KeyCode::End => self.move_sel(1_000_000),
-            KeyCode::Char(c @ ('g' | 'c' | 'm' | 's' | 'v' | 'p' | 'n')) => {
+            KeyCode::Char(c @ ('g' | 'c' | 'm' | 's' | 'w' | 'p' | 'n')) => {
                 let s = match c {
                     'g' => Sort::Gpu,
                     'c' => Sort::Cpu,
                     'm' => Sort::Mem,
                     's' => Sort::Rss,
-                    'v' => Sort::Virt,
+                    'w' => Sort::Swap,
                     'p' => Sort::Pid,
                     _ => Sort::Name,
                 };
