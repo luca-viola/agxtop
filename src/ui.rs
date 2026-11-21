@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::sys::{self, GpuInfo, KmsgWatch, Proc, Scanner, Sensor};
 use crate::tracer::{Client, Tracer};
-use crate::util::{clock_hms, fmt_g, human, short, thousands};
+use crate::util::{clock_hms, fmt_g, human, short, thousands, whole};
 
 const HIST: usize = 400;
 const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -16,7 +16,10 @@ const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇',
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sort {
     Gpu,
+    Cpu,
     Mem,
+    Rss,
+    Virt,
     Pid,
     Name,
 }
@@ -210,6 +213,8 @@ pub struct Ui {
     used_hist: VecDeque<f64>,
     mem_est: bool,
     mem_zoom: bool,
+    /// pid -> (CPU seconds, time) at the previous refresh
+    cpu_prev: HashMap<i32, (f64, f64)>,
     show_mem_graph: bool,
     sel: usize,
     sel_pid: Option<i32>,
@@ -261,6 +266,7 @@ impl Ui {
             used_hist: VecDeque::new(),
             mem_est: false,
             mem_zoom: false,
+            cpu_prev: HashMap::new(),
             show_mem_graph: false,
             sel: 0,
             sel_pid: None,
@@ -314,6 +320,18 @@ impl Ui {
                 v.min(100.0)
             });
         }
+        let t = crate::util::now();
+        let mut prev = HashMap::new();
+        for (pid, p) in self.procs.iter_mut() {
+            let Some(cs) = p.cpu_secs else { continue };
+            if let Some(&(ps, pt)) = self.cpu_prev.get(pid) {
+                if t > pt && cs >= ps {
+                    p.cpu = Some(100.0 * (cs - ps) / (t - pt));
+                }
+            }
+            prev.insert(*pid, (cs, t));
+        }
+        self.cpu_prev = prev;
         let mems: Vec<f64> = self.procs.values().filter_map(|p| p.mem).collect();
         self.mem_total_clients = (!mems.is_empty()).then(|| mems.iter().sum());
         self.mem_est = self.procs.values().any(|p| p.mem_est);
@@ -555,7 +573,17 @@ impl Ui {
         }
 
         // process table
-        let hdr = format!("{:>7} {:<10} {:>6} {:>10}  COMMAND", "PID", "USER", "GPU%", "GPU MEM");
+        let hdr = format!(
+            "{:>7} {:<10} {:>6} {:>6} {:>8} {:>8} {:>8}  COMMAND",
+            "PID",
+            "USER",
+            "GPU%",
+            "CPU%",
+            // estimated sizes are marked once here instead of on every row
+            if self.mem_est { "~GPU MEM" } else { "GPU MEM" },
+            "SYS MEM",
+            "VIRT MEM"
+        );
         p.put(y, 0, &format!("{hdr:<width$}", width = w as usize), Painter::cpb(5));
         y += 1;
         // PID order first, then a stable sort, so equal rows don't reshuffle
@@ -565,7 +593,10 @@ impl Ui {
         rows.sort_by(|a, b| {
             let o = match sort {
                 Sort::Gpu => a.gpu.unwrap_or(0.0).total_cmp(&b.gpu.unwrap_or(0.0)),
+                Sort::Cpu => a.cpu.unwrap_or(0.0).total_cmp(&b.cpu.unwrap_or(0.0)),
                 Sort::Mem => a.mem.unwrap_or(0.0).total_cmp(&b.mem.unwrap_or(0.0)),
+                Sort::Rss => a.rss.unwrap_or(0.0).total_cmp(&b.rss.unwrap_or(0.0)),
+                Sort::Virt => a.vsz.unwrap_or(0.0).total_cmp(&b.vsz.unwrap_or(0.0)),
                 Sort::Pid => a.pid.cmp(&b.pid),
                 Sort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
             };
@@ -592,9 +623,18 @@ impl Ui {
         }
         for (i, pr) in rows.iter().skip(self.top).take(self.page).enumerate() {
             let g = pr.gpu.map_or("n/a".into(), |g| format!("{g:.1}"));
-            let mem = format!("{}{}", if pr.mem_est { "~" } else { "" }, human(pr.mem));
             let user: String = pr.user.chars().take(10).collect();
-            let line = format!("{:>7} {:<10} {:>6} {:>10}  {}", pr.pid, user, g, mem, pr.cmd);
+            let line = format!(
+                "{:>7} {:<10} {:>6} {:>6} {:>8} {:>8} {:>8}  {}",
+                pr.pid,
+                user,
+                g,
+                pr.cpu.map_or("".into(), |c| format!("{c:.1}")),
+                whole(pr.mem),
+                whole(pr.rss),
+                whole(pr.vsz),
+                pr.cmd
+            );
             if self.top + i == self.sel {
                 let st = Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
                 p.put(y, 0, &format!("{line:<width$}", width = w as usize), st);
@@ -612,12 +652,15 @@ impl Ui {
         // footer
         let sortname = match self.sort {
             Sort::Gpu => "GPU%",
-            Sort::Mem => "memory",
+            Sort::Cpu => "CPU%",
+            Sort::Mem => "GPU mem",
+            Sort::Rss => "sys mem",
+            Sort::Virt => "virt mem",
             Sort::Pid => "PID",
             Sort::Name => "name",
         };
         let mut foot = format!(
-            " h help {} q quit  g/m/p/n sort ({sortname}{})  r reverse  z zoom mem  +/- interval ",
+            " h help {} q quit  g/c/m/s/v/p/n sort ({sortname}{})  r reverse  z zoom mem  +/- interval ",
             if w < 60 { " Tab graph " } else { "" },
             if self.reverse { " ↓" } else { " ↑" }
         );
@@ -634,12 +677,13 @@ impl Ui {
     }
 
     fn draw_help(p: &mut Painter) {
-        let lines: [(&str, bool); 21] = [
+        let lines: [(&str, bool); 22] = [
             ("Keys", true),
             ("  ↑ / ↓            select process", false),
             ("  PgUp / PgDn      scroll a page", false),
             ("  Home / End       first / last process", false),
-            ("  g  m  p  n       sort by GPU% / memory / PID / name", false),
+            ("  g c m s v p n    sort by GPU% / CPU% / GPU mem /", false),
+            ("                   sys mem / virt mem / PID / name", false),
             ("                   (press again to reverse)", false),
             ("  r                reverse sort order", false),
             ("  z                zoom memory graph to what's in use", false),
@@ -702,10 +746,13 @@ impl Ui {
             KeyCode::PageDown => self.move_sel(page),
             KeyCode::Home => self.move_sel(-1_000_000),
             KeyCode::End => self.move_sel(1_000_000),
-            KeyCode::Char(c @ ('g' | 'm' | 'p' | 'n')) => {
+            KeyCode::Char(c @ ('g' | 'c' | 'm' | 's' | 'v' | 'p' | 'n')) => {
                 let s = match c {
                     'g' => Sort::Gpu,
+                    'c' => Sort::Cpu,
                     'm' => Sort::Mem,
+                    's' => Sort::Rss,
+                    'v' => Sort::Virt,
                     'p' => Sort::Pid,
                     _ => Sort::Name,
                 };

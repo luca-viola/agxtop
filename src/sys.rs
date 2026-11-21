@@ -57,7 +57,31 @@ pub struct Proc {
     pub mem: Option<f64>,
     pub mem_est: bool,
     pub gpu: Option<f64>,
+    /// resident and virtual size of the whole process, in bytes
+    pub rss: Option<f64>,
+    pub vsz: Option<f64>,
+    /// CPU time used so far (user + system), seconds; `cpu` is the % since
+    /// the last refresh, filled in by the UI
+    pub cpu_secs: Option<f64>,
+    pub cpu: Option<f64>,
     paths: HashSet<String>,
+}
+
+/// user + system CPU time from /proc/<pid>/stat, in seconds
+fn cpu_secs(pid: i32) -> Option<f64> {
+    let t = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // fields after "(comm)": state is first, utime and stime are 12th and 13th
+    let mut it = t[t.rfind(')')? + 1..].split_whitespace().skip(11);
+    let ticks = it.next()?.parse::<f64>().ok()? + it.next()?.parse::<f64>().ok()?;
+    Some(ticks / unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64)
+}
+
+/// (virtual size, resident size) in bytes from /proc/<pid>/statm
+fn statm(pid: i32) -> Option<(f64, f64)> {
+    let t = fs::read_to_string(format!("/proc/{pid}/statm")).ok()?;
+    let mut it = t.split_whitespace().map(|v| v.parse::<f64>().ok());
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
+    Some((it.next()?? * page, it.next()?? * page))
 }
 
 /// Size of GPU buffers mapped into the process: device-node mappings,
@@ -197,6 +221,10 @@ impl Scanner {
             let cmd = String::from_utf8_lossy(&cmd).replace('\0', " ").trim().to_string();
             p.cmd = if cmd.is_empty() { p.name.clone() } else { cmd };
             p.user = username(md.uid());
+            p.cpu_secs = cpu_secs(pid);
+            if let Some((v, r)) = statm(pid) {
+                (p.vsz, p.rss) = (Some(v), Some(r));
+            }
             procs.insert(pid, p);
         }
         procs

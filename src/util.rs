@@ -80,6 +80,20 @@ pub fn short(b: Option<f64>) -> String {
     b.map_or("n/a".into(), |b| scaled(b, &["B", "K", "M", "G", "T"]))
 }
 
+/// Whole-number size for the process table: 101G, 815M, 16K. Halves round up.
+pub fn whole(b: Option<f64>) -> String {
+    let Some(mut b) = b else { return "n/a".into() };
+    let units = ["B", "K", "M", "G", "T"];
+    for (i, u) in units.iter().enumerate() {
+        let r = (b + 0.5).floor();
+        if r < 1024.0 || i == units.len() - 1 {
+            return format!("{r:.0}{u}");
+        }
+        b /= 1024.0;
+    }
+    unreachable!()
+}
+
 pub fn human(b: Option<f64>) -> String {
     b.map_or("n/a".into(), |b| scaled(b, &["B", "KiB", "MiB", "GiB", "TiB"]))
 }
@@ -119,6 +133,10 @@ mod tests {
         assert_eq!(short(Some(48.0 * 1024.0)), "48K");
         assert_eq!(human(Some(512.0 * 1024f64.powi(2))), "512.0MiB");
         assert_eq!(human(None), "n/a");
+        let g = 1024f64.powi(3);
+        assert_eq!(whole(Some(101.4 * g)), "101G");
+        assert_eq!(whole(Some(101.5 * g)), "102G");
+        assert_eq!(whole(Some(1023.6 * 1024.0)), "1M");
         assert_eq!(thousands(1234567.4), "1,234,567");
         assert_eq!(thousands(12.0), "12");
         assert_eq!(fmt_g(0.25), "0.25");
