@@ -466,65 +466,53 @@ impl Ui {
         let gpu = self.mem_total_clients.unwrap_or(0.0).min(used);
         let est = if self.mem_est { "~" } else { "" };
         p.put(y, half + 2, "MEM", Painter::cpb(4));
-        let mut mlab = format!(
-            "GPU {est}{} + apps {} / {}",
-            human(Some(gpu)),
-            human(Some(used - gpu)),
-            human(Some(self.ram_total))
-        );
-        if mlab.chars().count() as i32 > w - half - 12 {
-            mlab = format!("G{est}{}+{}/{}", short(Some(gpu)), short(Some(used - gpu)), short(Some(self.ram_total)));
-        }
-        p.stacked_bar(y, half + 6, w - half - 7, self.ram_total, &[(gpu, 6), (used - gpu, 7)], &mlab);
+        p.stacked_bar(y, half + 6, w - half - 7, self.ram_total, &[(gpu, 6), (used - gpu, 7)], "");
         y += 1;
-        let mut info_rows = 0;
+        // memory figures on their own line, left-aligned under the MEM bar
+        let right = (w - 1 - (half + 2)).max(1); // width of the right half
+        let plain = Style::default();
+        let lab = |f: &dyn Fn(Option<f64>) -> String, apps: &str| -> Vec<(String, Style)> {
+            vec![
+                ("GPU ".into(), plain),
+                (format!("{est}{}", f(Some(gpu))), Painter::cpb(6)),
+                (format!(" + {apps}"), plain),
+                (f(Some(used - gpu)), Painter::cpb(7)),
+                (" / ".into(), plain),
+                (f(Some(self.ram_total)), plain),
+            ]
+        };
+        let mlab = [lab(&human, "apps "), lab(&short, "apps "), lab(&short, "")]
+            .into_iter()
+            .find(|l| joined_len(l, "") <= right as usize)
+            .unwrap_or_else(|| lab(&short, ""));
+        put_row(&mut p, y, half + 2, &mlab, "");
         if self.mem_total_clients.is_none() {
-            p.put(y, 1, "GPU memory: n/a (driver doesn't report)", Style::default());
-            info_rows = 1;
+            p.put(y, 1, "GPU memory: n/a (driver doesn't report)", plain);
         }
+        y += 1;
         if !self.sensors.is_empty() {
-            // grid right-aligned under MEM: labels left, values right
-            let cells: Vec<(&str, String)> = self
+            // left-aligned under MEM, one line; wraps whole items only if needed
+            let items: Vec<(String, Style)> = self
                 .sensors
                 .iter()
                 .map(|s| {
                     let v = if s.unit == "W" { format!("{:.1}{}", s.value, s.unit) } else { format!("{:.0}{}", s.value, s.unit) };
-                    (s.label.as_str(), v)
+                    (format!("{} {v}", s.label), Painter::cp(2))
                 })
                 .collect();
-            let lw = cells.iter().map(|c| c.0.chars().count()).max().unwrap_or(0);
-            let vw = cells.iter().map(|c| c.1.chars().count()).max().unwrap_or(0);
-            let cw = (lw + 1 + vw) as i32;
-            let gap = 4;
-            let n = cells.len() as i32;
-            // (rows, cols) for a grid starting at column `left`, balanced
-            let grid = |left: i32| {
-                let region = (w - 1 - left).max(1);
-                let max_cols = ((region + gap) / (cw + gap)).clamp(1, n);
-                let rows = (n + max_cols - 1) / max_cols;
-                (rows, (n + rows - 1) / rows)
+            // fewest rows that fit, with the items spread evenly over them
+            let n = items.len();
+            let per = |width: i32| {
+                (1..=n)
+                    .map(|k| n.div_ceil(k))
+                    .find(|&per| items.chunks(per).all(|c| joined_len(c, "  ") <= width as usize))
+                    .unwrap_or(1)
             };
-            // under MEM if it takes at most 2 rows there, else the full width
-            // (below the n/a note, if any)
-            let (mut left, mut sy) = (half + 2, y);
-            let (mut rows, mut cols) = grid(left);
-            if rows > 2 {
-                (left, sy) = (1, y + info_rows);
-                (rows, cols) = grid(left);
+            // always from the left edge, so it doesn't move on resize
+            for row in items.chunks(per(w - 2)) {
+                put_row(&mut p, y, 1, row, "  ");
+                y += 1;
             }
-            let bw = cols * cw + (cols - 1) * gap;
-            let x0 = (w - 1 - bw).max(left);
-            for (i, (l, v)) in cells.iter().enumerate() {
-                let (r, c) = (i as i32 / cols, i as i32 % cols);
-                let cell = format!("{l:<lw$} {v:>vw$}", lw = lw, vw = vw);
-                p.put(sy + r, x0 + c * (cw + gap), &cell, Painter::cp(2));
-            }
-            info_rows = info_rows.max(sy - y + rows);
-        }
-        if info_rows > 0 {
-            y += info_rows;
-        } else if h >= 30 {
-            y += 1;
         }
         if h >= 30 {
             // queue line only when there's room
