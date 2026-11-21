@@ -21,6 +21,17 @@ higher than real shader load.
 
 ## Install
 
+On Fedora Asahi Remix, from [Copr](https://copr.fedorainfracloud.org/coprs/lviola/agxtop/):
+
+```
+sudo dnf copr enable lviola/agxtop
+sudo dnf install agxtop
+```
+
+The package sets the capabilities, so `agxtop` runs without sudo.
+
+### From source
+
 Needs a Rust toolchain (`sudo dnf install cargo`).
 
 ```
