@@ -386,7 +386,7 @@ impl Ui {
         if let Some(m) = gi.max_mhz {
             parts.push(format!("{m} MHz"));
         }
-        let mut head = if parts.is_empty() {
+        let head = if parts.is_empty() {
             let mut d: Vec<&String> = self.drivers.iter().collect();
             d.sort();
             let d = d.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
@@ -394,30 +394,31 @@ impl Ui {
         } else {
             parts.join(" · ")
         };
-        if w < 120 {
-            let short_parts: Vec<String> =
+        let short_head = {
+            let sp: Vec<String> =
                 [self.soc.clone(), gi.cores.map(|c| format!("{c} cores"))].into_iter().flatten().collect();
-            if !short_parts.is_empty() {
-                head = short_parts.join(" · ");
-            }
-        }
+            if sp.is_empty() { head.clone() } else { sp.join(" · ") }
+        };
+        let tot = gi.timeouts + self.kmsg.new;
+        let now_s = if self.kmsg.new > 0 { format!(" (+{} now!)", self.kmsg.new) } else { String::new() };
+        let long_rest =
+            format!("jobs/s: {}   {}s   {}   ", thousands(self.jobs_s), fmt_g(self.interval), clock_hms());
+        let short_rest = format!("{} jobs/s  ", thousands(self.jobs_s));
+        let long_to = format!("GPU timeouts: {tot} this boot{now_s}");
+        let short_to = format!("timeouts: {tot}{now_s}");
+        // longest variant that fits the width
+        let fits = |h: &str, r: &str, t: &str| 15 + h.chars().count() + 4 + r.chars().count() + t.chars().count() <= w as usize;
+        let (head, rest, to) = [(&head, &long_rest, &long_to), (&head, &short_rest, &short_to)]
+            .into_iter()
+            .find(|(h, r, t)| fits(h, r, t))
+            .unwrap_or((&short_head, &short_rest, &short_to));
         let mut x = 15;
         p.put(y, x, &format!(" {head}"), bold);
         x += head.chars().count() as i32 + 4;
-        let rest = if w >= 120 {
-            format!("jobs/s: {}   {}s   {}   ", thousands(self.jobs_s), fmt_g(self.interval), clock_hms())
-        } else {
-            format!("{} jobs/s  ", thousands(self.jobs_s))
-        };
-        p.put(y, x, &rest, Style::default());
+        p.put(y, x, rest, Style::default());
         x += rest.chars().count() as i32;
-        let tot = gi.timeouts + self.kmsg.new;
-        let mut to = if w >= 120 { format!("GPU timeouts: {tot} this boot") } else { format!("timeouts: {tot}") };
-        if self.kmsg.new > 0 {
-            to += &format!(" (+{} now!)", self.kmsg.new);
-        }
         let tst = if self.kmsg.new > 0 { Painter::cpb(3) } else { Painter::cp(if tot > 0 { 2 } else { 1 }) };
-        p.put(y, x, &to, tst);
+        p.put(y, x, to, tst);
         y += 1;
 
         let half = (w - 3) / 2;

@@ -2,6 +2,8 @@
 
 An nvtop-style GPU monitor for [Asahi Linux](https://asahilinux.org) on Apple Silicon.
 
+![agxtop on an M1 Max running whisper.cpp](docs/screenshot.png)
+
 The Asahi GPU driver exposes no performance counters yet, so tools like nvtop
 show nothing there. agxtop builds the picture from what the kernel does expose:
 
