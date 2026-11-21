@@ -573,15 +573,17 @@ impl Ui {
         }
 
         // process table
+        // USER as wide as the longest name shown (4..10)
+        let uw = self.procs.values().map(|p| p.user.chars().count()).max().unwrap_or(0).clamp(4, 10);
         let hdr = format!(
-            "{:>7} {:<10} {:>6} {:>6} {:>8} {:>8} {:>8}  COMMAND",
+            "{:>7} {:<uw$} {:>5} {:>5} {:>5} {:>5} {:>5}  COMMAND",
             "PID",
             "USER",
             "GPU%",
             "CPU%",
             // estimated sizes are marked once here instead of on every row
-            if self.mem_est { "~GPU MEM" } else { "GPU MEM" },
-            "SYS MEM",
+            if self.mem_est { "~GPUM" } else { "GPUM" },
+            "SYSM",
             "SWAP"
         );
         p.put(y, 0, &format!("{hdr:<width$}", width = w as usize), Painter::cpb(5));
@@ -623,9 +625,9 @@ impl Ui {
         }
         for (i, pr) in rows.iter().skip(self.top).take(self.page).enumerate() {
             let g = pr.gpu.map_or("n/a".into(), |g| format!("{g:.1}"));
-            let user: String = pr.user.chars().take(10).collect();
+            let user: String = pr.user.chars().take(uw).collect();
             let line = format!(
-                "{:>7} {:<10} {:>6} {:>6} {:>8} {:>8} {:>8}  {}",
+                "{:>7} {:<uw$} {:>5} {:>5} {:>5} {:>5} {:>5}  {}",
                 pr.pid,
                 user,
                 g,
